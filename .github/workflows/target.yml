@@ -1,0 +1,8 @@
+name: Target
+on: workflow_dispatch
+jobs:
+  work:
+    runs-on: carrier-probe
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "the real job ran on $(hostname), $RUNNER_NAME"; uname -a; docker run --rm alpine echo docker works

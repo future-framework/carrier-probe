@@ -1,0 +1,17 @@
+name: Limit
+run-name: limit ${{ inputs.runner }}
+on:
+  workflow_dispatch:
+    inputs:
+      runner: { required: true }
+      list: { required: true }      # a JSON array, one entry per job: [1,2,3]
+      seconds: { required: true }
+jobs:
+  hold:
+    strategy:
+      max-parallel: 256
+      matrix:
+        i: ${{ fromJSON(inputs.list) }}
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - run: sleep ${{ inputs.seconds }}

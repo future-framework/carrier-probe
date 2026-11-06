@@ -1,0 +1,43 @@
+name: SuperCI
+run-name: ${{ inputs.name }}
+on:
+  workflow_dispatch:
+    inputs:
+      name: { required: true }
+      runner: { required: true }
+permissions:
+  id-token: write
+jobs:
+  carry:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Carry the job
+        shell: bash
+        env:
+          JIT: ${{ secrets.JIT }}
+        run: |
+          set -euo pipefail
+          t() { echo "[$(date -u +%H:%M:%S.%3N)] $*"; }
+          t "carrier started on $RUNNER_OS $RUNNER_ARCH"
+          # The identity a control plane would check (claims only; the token itself is not printed).
+          tok=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=superci-probe" | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"])')
+          echo "$tok" | cut -d. -f2 | tr '_-' '/+' | python3 -c 'import base64,json,sys;s=sys.stdin.read().strip();s+="="*(-len(s)%4);c=json.loads(base64.b64decode(s));print(json.dumps({k:c.get(k) for k in ("iss","aud","repository","repository_id","run_id","run_attempt","workflow_ref","job_workflow_ref","ref","event_name","runner_environment")},indent=1))'
+          t "identity token read"
+          # GitHub's runner already on this machine: copy it, without its own registration.
+          pid=$(pgrep -f Runner.Listener | head -1 || true)
+          if [ -n "$pid" ] && [ -e /proc/$pid/exe ]; then root=$(dirname "$(dirname "$(readlink -f /proc/$pid/exe)")"); else root=$(dirname "$(dirname "$(ps -o comm= -p "$pid" 2>/dev/null || true)")"); fi
+          t "runner here: ${root:-none}"
+          if [ -n "${root:-}" ] && [ -x "$root/run.sh" ]; then
+            mkdir -p "$RUNNER_TEMP/carried" && cp -R "$root"/. "$RUNNER_TEMP/carried"/
+            rm -f "$RUNNER_TEMP/carried"/.runner "$RUNNER_TEMP/carried"/.credentials* "$RUNNER_TEMP/carried"/.env 2>/dev/null || true
+            rm -rf "$RUNNER_TEMP/carried/_diag" "$RUNNER_TEMP/carried/_work" 2>/dev/null || true
+          else
+            t "downloading a runner"
+            v=$(curl -fsS https://api.github.com/repos/actions/runner/releases/latest | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"][1:])')
+            os=$([ "$RUNNER_OS" = macOS ] && echo osx || echo linux); arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo arm64 || echo x64)
+            mkdir -p "$RUNNER_TEMP/carried" && curl -fsSL "https://github.com/actions/runner/releases/download/v$v/actions-runner-$os-$arch-$v.tar.gz" | tar -xz -C "$RUNNER_TEMP/carried"
+          fi
+          t "runner ready, starting with the job's config"
+          cd "$RUNNER_TEMP/carried" && ./run.sh --jitconfig "$JIT" 2>&1 | sed -u 's/^/  runner: /'
+          t "runner ended"
