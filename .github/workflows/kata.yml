@@ -51,7 +51,7 @@ jobs:
           step d-service sh -c 'docker run -d --name pg -e POSTGRES_PASSWORD=x postgres:17-alpine >/dev/null && for i in $(seq 1 60); do docker exec pg pg_isready -q && exit 0; sleep 0.5; done; exit 1'
           EOF
           for r in kata runc; do
-            flags=$([ $r = kata ] && echo "--runtime kata --privileged" || echo "--privileged")
+            flags=$([ $r = kata ] && echo "--runtime kata --cap-add ALL --security-opt seccomp=unconfined --security-opt apparmor=unconfined" || echo "--privileged")
             s=$(date +%s%N); docker run --rm $flags --cpus 2 --memory 6g -v $PWD/job.sh:/job.sh:ro --tmpfs /var/lib/docker:rw,exec,size=6g probe-job bash /job.sh 2>&1 | sed "s/^/$r /"; e=$(date +%s%N)
             echo "$r whole $(( (e-s)/1000000000 )) s"
           done
