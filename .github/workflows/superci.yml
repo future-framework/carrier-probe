@@ -26,7 +26,7 @@ jobs:
           root=$([ -n "$exe" ] && dirname "$(dirname "$exe")" || true)
           t "runner here: ${root:-none}"
           if [ -n "$root" ] && [ -x "$root/run.sh" ]; then
-            mkdir -p "$RUNNER_TEMP/carried" && cp -R "$root"/. "$RUNNER_TEMP/carried"/
+            mkdir -p "$RUNNER_TEMP/carried" && if [ "$RUNNER_OS" = macOS ]; then cp -cR "$root"/. "$RUNNER_TEMP/carried"/; else cp -R "$root"/. "$RUNNER_TEMP/carried"/; fi
             rm -rf "$RUNNER_TEMP/carried"/.runner "$RUNNER_TEMP/carried"/.credentials* "$RUNNER_TEMP/carried"/.env "$RUNNER_TEMP/carried/_diag" "$RUNNER_TEMP/carried/_work"
           else
             t "downloading a runner"
