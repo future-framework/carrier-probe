@@ -1,0 +1,57 @@
+name: Kata
+on:
+  workflow_dispatch:
+    inputs:
+      runner: { required: false, default: ubuntu-24.04 }
+jobs:
+  kata:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: KVM and Kata
+        run: |
+          set -eux
+          ls -l /dev/kvm; nproc; free -g | head -2
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          for t in kata-static kata-go-static; do curl -fsSL https://github.com/kata-containers/kata-containers/releases/download/4.3.1/$t-4.3.1-$arch.tar.zst | zstd -d | sudo tar -x -C /; done
+          sudo ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-kata-v2
+          sudo jq '.runtimes += {"kata": {"runtimeType": "io.containerd.kata.v2"}}' /etc/docker/daemon.json > /tmp/d.json || echo '{"runtimes":{"kata":{"runtimeType":"io.containerd.kata.v2"}}}' > /tmp/d.json
+          sudo mv /tmp/d.json /etc/docker/daemon.json && sudo systemctl restart docker
+          docker pull -q alpine
+      - name: Start times
+        run: |
+          for hv in qemu clh fc; do
+            sudo ln -sf configuration-$hv.toml /opt/kata/share/defaults/kata-containers/configuration.toml
+            for i in 1 2 3; do s=$(date +%s%N); out=$(docker run --rm --runtime kata alpine uname -r 2>&1 | tail -1); e=$(date +%s%N); echo "$hv run$i $(( (e-s)/1000000 )) ms kernel=$out"; done
+          done
+          for i in 1 2 3; do s=$(date +%s%N); docker run --rm alpine true; e=$(date +%s%N); echo "runc run$i $(( (e-s)/1000000 )) ms"; done
+      - name: The job under Kata (Cloud Hypervisor) and runc
+        run: |
+          sudo ln -sf configuration-clh.toml /opt/kata/share/defaults/kata-containers/configuration.toml
+          cat > Dockerfile <<'EOF'
+          FROM ubuntu:24.04
+          RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git curl ca-certificates nodejs npm docker.io iproute2 iptables >/dev/null && rm -rf /var/lib/apt/lists/*
+          RUN mkdir /work
+          EOF
+          docker build -q -t probe-job . >/dev/null
+          cat > job.sh <<'EOF'
+          secs() { awk "BEGIN{printf \"%.1f\", ($2-$1)/1e9}"; }
+          step() { local n=$1; shift; local s=$(date +%s%N); "$@" >/tmp/$n.log 2>&1; local rc=$?; local e=$(date +%s%N); echo "$n $(secs $s $e) $([ $rc = 0 ] && echo ok || echo "FAILED:$(tail -1 /tmp/$n.log | cut -c1-100)")"; }
+          cd /work
+          step clone git clone -q --depth 1 https://github.com/expressjs/express; cd express
+          step install npm install --no-audit --no-fund --loglevel=error
+          step test npm test --silent
+          step files sh -c 'mkdir -p /work/f && cd /work/f && for i in $(seq 1 20000); do echo $i > f$i; done && rm -rf /work/f'
+          (dockerd >/tmp/dockerd.log 2>&1 &)
+          step dockerd sh -c 'for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 0.5; done; tail -3 /tmp/dockerd.log; exit 1'
+          step d-run docker run --rm alpine echo hi
+          step d-build sh -c 'mkdir -p /work/b && printf "FROM alpine\nRUN apk add --no-cache curl >/dev/null\n" > /work/b/Dockerfile && docker build -q /work/b'
+          step d-service sh -c 'docker run -d --name pg -e POSTGRES_PASSWORD=x postgres:17-alpine >/dev/null && for i in $(seq 1 60); do docker exec pg pg_isready -q && exit 0; sleep 0.5; done; exit 1'
+          EOF
+          for r in kata runc; do
+            flags=$([ $r = kata ] && echo "--runtime kata --privileged" || echo "--privileged")
+            s=$(date +%s%N); docker run --rm $flags --cpus 2 --memory 6g -v $PWD/job.sh:/job.sh:ro --tmpfs /var/lib/docker:rw,exec,size=6g probe-job bash /job.sh 2>&1 | sed "s/^/$r /"; e=$(date +%s%N)
+            echo "$r whole $(( (e-s)/1000000000 )) s"
+          done
