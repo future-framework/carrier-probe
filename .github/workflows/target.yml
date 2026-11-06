@@ -1,8 +1,14 @@
 name: Target
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      seconds: { required: false, default: "0" }
 jobs:
   work:
     runs-on: carrier-probe
     steps:
       - uses: actions/checkout@v4
-      - run: echo "the real job ran on $(hostname), $RUNNER_NAME"; uname -a; docker run --rm alpine echo docker works
+      - run: echo "the real job ran on $(hostname), $RUNNER_NAME, $RUNNER_OS"
+        shell: bash
+      - run: sleep ${{ inputs.seconds }}
+        shell: bash
